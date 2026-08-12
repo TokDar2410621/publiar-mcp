@@ -4,6 +4,8 @@
 
 **Serveur MCP qui écrit des lead magnets LinkedIn et refuse d'inventer.**
 
+[![publiar-mcp MCP server](https://glama.ai/mcp/servers/TokDar2410621/publiar-mcp/badges/card.svg)](https://glama.ai/mcp/servers/TokDar2410621/publiar-mcp)
+
 > **EN.** MCP server for Publiar. Writes LinkedIn lead magnets that refuse to
 > fabricate facts, renders the matching visual, publishes to LinkedIn and tracks
 > what happened. 19 tools, stdio transport. Generated posts are in French. MIT.
