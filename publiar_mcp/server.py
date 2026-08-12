@@ -139,18 +139,18 @@ TOOLS: list[Tool] = [
             "properties": {
                 "outils":        {"type": "array", "items": {"type": "string"}, "description": "Outils utilisés (ex: ['Claude','n8n'])"},
                 "chiffre":       {"type": "object", "description": "Résultat chiffré : {value, unit?, timeframe?, source, source_detail?}"},
-                "resource_type": {"type": "string", "enum": ["guide_pdf","video_tutorial","bundle_prompts","agents_system","workflow_template","cheat_sheet"]},
-                "cta_keyword":   {"type": "string", "description": "Mot-clé CTA en majuscules (CLAUDE, MAPS, AGENTS...)"},
-                "proof_type":    {"type": "string", "enum": ["none","photo_selfie","screenshot_workflow","file_tree","role_list","benchmark_table","product_announcement"]},
-                "proof_file_tree":     {"type": "array", "description": "Si proof_type=file_tree"},
-                "proof_roles":         {"type": "array", "description": "Si proof_type=role_list"},
-                "proof_product_name":  {"type": "string"},
-                "proof_product_link":  {"type": "string"},
-                "audience":      {"type": "string", "enum": ["grand_public","pro_tech","pro_business"]},
-                "workshop_date": {"type": "string"},
-                "auto_dm_enabled":   {"type": "boolean"},
-                "resource_url":      {"type": "string"},
-                "resource_message":  {"type": "string"},
+                "resource_type": {"type": "string", "enum": ["guide_pdf","video_tutorial","bundle_prompts","agents_system","workflow_template","cheat_sheet"], "description": "Nature de la ressource promise en echange du commentaire. Elle doit exister avant la publication, la regle R6 la teste."},
+                "cta_keyword":   {"type": "string", "description": "Mot-cle CTA en MAJUSCULES, ex: CLAUDE, MAPS, AGENTS. C'est ce mot que les commentaires devront contenir pour declencher un DM."},
+                "proof_type":    {"type": "string", "enum": ["none","photo_selfie","screenshot_workflow","file_tree","role_list","benchmark_table","product_announcement"], "description": "Type de preuve disponible. Determine l'archetype visuel deduit : une preuve reelle uploadee bat toujours une preuve generee."},
+                "proof_file_tree":     {"type": "array", "items": {"type": "string"}, "description": "Arborescence, une entree par ligne. Obligatoire si proof_type vaut file_tree, ignore sinon."},
+                "proof_roles":         {"type": "array", "items": {"type": "string"}, "description": "Liste de 3 a 5 roles d'agents. Obligatoire si proof_type vaut role_list, ignore sinon."},
+                "proof_product_name":  {"type": "string", "description": "Nom du produit annonce. Obligatoire si proof_type vaut product_announcement."},
+                "proof_product_link":  {"type": "string", "description": "Lien officiel du produit annonce, utilise avec proof_product_name."},
+                "audience":      {"type": "string", "enum": ["grand_public","pro_tech","pro_business"], "description": "Public vise. Bascule l'archetype vers youtube_thumbnail quand grand_public est choisi."},
+                "workshop_date": {"type": "string", "description": "Date d'un atelier a annoncer en CTA secondaire, au format libre. Omis, aucun second CTA n'est ecrit."},
+                "auto_dm_enabled":   {"type": "boolean", "description": "Prepare le post pour l'envoi automatique des DM. N'arme rien ici : l'armement se fait a l'enregistrement, via register_published."},
+                "resource_url":      {"type": "string", "description": "URL de la ressource promise. Testee avant generation : un lien mort annonce a des commentateurs coute plus cher que l'absence de post."},
+                "resource_message":  {"type": "string", "description": "Gabarit du DM envoye aux commentateurs. Accepte {name}, {keyword} et {url}."},
             },
             "required": ["outils", "resource_type", "cta_keyword", "proof_type"],
         },
@@ -185,22 +185,47 @@ TOOLS: list[Tool] = [
         ),
         inputSchema={
             "type": "object",
-            "properties": {"spec": {"type": "object"}},
+            "properties": {
+                "spec": {
+                    "type": "object",
+                    "description": "Recette d'animation. Deux formes acceptees : tool_pairing avec brands, connector et caption_bottom ; metric_counter avec value, unit, prefix, label et caption_bottom. Toute autre forme est refusee.",
+                },
+            },
             "required": ["spec"],
         },
     ),
     Tool(
         name="list_corpus",
         description=(
-            "Liste les lead magnets du corpus de référence (45 entrées : 30+ posts du docx "
-            "Darius + 45 images classifiées). Filtrable par archetype, tri par engagement."
+            "Liste le corpus de reference : 45 lead magnets LinkedIn reels, analyses, classes "
+            "par archetype visuel et accompagnes de leur engagement mesure. Sert a voir ce qui "
+            "a marche avant d'ecrire.\n\n"
+            "Quand l'utiliser : parcourir ou filtrer le corpus entier, par exemple pour "
+            "inspecter une famille visuelle. Pour trouver les entrees proches d'un sujet "
+            "precis, prends find_similar_corpus, qui fait une recherche semantique la ou "
+            "celui-ci ne fait qu'un listing trie.\n\n"
+            "Rend, par entree : archetype, texte du post, marques citees et engagement. "
+            "Lecture seule, aucun effet de bord, rejouable autant que voulu."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "archetype": {"type": "string", "description": "Filtre par archétype (optionnel)"},
-                "order_by":  {"type": "string", "enum": ["engagement","archetype"], "default": "engagement"},
-                "limit":     {"type": "integer", "default": 60, "maximum": 200},
+                "archetype": {
+                    "type": "string",
+                    "description": "Restreint a un archetype, parmi tool_pairing, benchmark_table, dark_thumbnail, youtube_thumbnail, selfie_workspace, system_workflow_screenshot, file_tree_diagram, agent_role_diagram. Omis, rend tous les archetypes.",
+                },
+                "order_by": {
+                    "type": "string",
+                    "enum": ["engagement", "archetype"],
+                    "default": "engagement",
+                    "description": "engagement trie du plus engageant au moins engageant ; archetype regroupe par famille visuelle. Defaut engagement.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 60,
+                    "maximum": 200,
+                    "description": "Nombre maximal d'entrees rendues. Defaut 60, plafond 200. Le corpus en compte 45, donc le defaut suffit a tout voir.",
+                },
             },
         },
     ),
@@ -216,8 +241,8 @@ TOOLS: list[Tool] = [
             "properties": {
                 "query":     {"type": "string", "description": "Description libre du lead magnet souhaité"},
                 "brands":    {"type": "array", "items": {"type": "string"}, "description": "Brands seed pour booster les matches"},
-                "k":         {"type": "integer", "default": 5, "maximum": 20},
-                "archetype": {"type": "string", "description": "Restrict à un archétype"},
+                "k":         {"type": "integer", "default": 5, "maximum": 20, "description": "Nombre de resultats rendus, du plus proche au moins proche. Defaut 5, plafond 20."},
+                "archetype": {"type": "string", "description": "Restreint la recherche a un archetype visuel. Omis, cherche dans tout le corpus."},
             },
             "required": ["query"],
         },
@@ -300,59 +325,152 @@ TOOLS: list[Tool] = [
     Tool(
         name="register_published",
         description=(
-            "Enregistre un lead magnet publié sur LinkedIn (snapshot du LeadMagnetInput + "
-            "URN du post LinkedIn pour le tracking engagement)."
+            "Fait entrer un post LinkedIn deja en ligne dans le suivi Publiar, pour que ses "
+            "commentaires et ses DM aient un enregistrement auquel se rattacher. Ne publie "
+            "rien : le post doit exister avant l'appel.\n\n"
+            "Quand l'utiliser : juste apres publish_lead_magnet, avec le post_urn qu'il rend, "
+            "ou apres une publication faite a la main dans LinkedIn. Sans cet enregistrement, "
+            "paste_comments, toggle_published_dm et mark_engagement_sent n'ont aucune cible.\n\n"
+            "Effets, a lire avant d'appeler : cree un enregistrement. auto_dm_enabled a true "
+            "ARME l'envoi automatique aux commentateurs dont le message contient cta_keyword ; "
+            "laisse-le a false tant que resource_message n'a pas ete relu par l'utilisateur. "
+            "NON idempotent : rappeler avec le meme post_urn cree un doublon. Exige une cle MCP."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "post_urn":         {"type": "string", "description": "urn:li:ugcPost:... ou urn:li:share:..."},
-                "cta_keyword":      {"type": "string"},
-                "input_payload":    {"type": "object", "description": "LeadMagnetInput original"},
-                "post_text":        {"type": "string"},
-                "visual_spec":      {"type": "object"},
-                "archetype":        {"type": "string"},
-                "resource_url":     {"type": "string"},
-                "resource_message": {"type": "string"},
-                "auto_dm_enabled":  {"type": "boolean", "default": False},
+                "post_urn": {
+                    "type": "string",
+                    "description": "URN du post LinkedIn, forme urn:li:share:... ou urn:li:ugcPost:.... C'est la cle du suivi, elle doit correspondre a un post reellement en ligne.",
+                },
+                "cta_keyword": {
+                    "type": "string",
+                    "description": "Mot-cle attendu dans les commentaires, en MAJUSCULES. Il sert au matching : un commentaire qui le contient devient un engagement a traiter.",
+                },
+                "input_payload": {
+                    "type": "object",
+                    "description": "Entree structuree ayant servi a generer le post, conservee telle quelle pour l'apprentissage. Optionnel.",
+                },
+                "post_text": {
+                    "type": "string",
+                    "description": "Texte publie, conserve pour l'avant/apres d'update_post et pour l'analyse. Sans lui, update_post ne peut pas montrer l'etat courant.",
+                },
+                "visual_spec": {
+                    "type": "object",
+                    "description": "Spec du visuel attache, conservee pour rejouer ou analyser l'archetype. Optionnel.",
+                },
+                "archetype": {
+                    "type": "string",
+                    "description": "Archetype visuel du post, par exemple tool_pairing ou dark_thumbnail. Sert au regroupement des performances par famille.",
+                },
+                "resource_url": {
+                    "type": "string",
+                    "description": "URL de la ressource promise dans le post. Elle part dans les DM, donc elle doit repondre.",
+                },
+                "resource_message": {
+                    "type": "string",
+                    "description": "Gabarit du DM. Accepte {name}, {keyword} et {url}. C'est ce texte qui partira au nom de l'utilisateur si auto_dm_enabled est arme.",
+                },
+                "auto_dm_enabled": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "true arme l'envoi automatique des DM des l'enregistrement. Defaut false, volontairement : on n'arme pas un envoi au nom de quelqu'un sans qu'il ait relu le message.",
+                },
             },
             "required": ["post_urn", "cta_keyword"],
         },
     ),
     Tool(
         name="list_published",
-        description="Liste les lead magnets publiés de l'utilisateur (avec stats engagement rolling).",
+        description=(
+            "Liste tous les lead magnets publies de l'utilisateur, avec pour chacun son URN "
+            "LinkedIn, son mot-cle CTA, son archetype, son etat de suivi et ses compteurs "
+            "d'engagement.\n\n"
+            "Quand l'utiliser : c'est le point d'entree du suivi. Les identifiants numeriques "
+            "qu'il rend sont ceux qu'attendent get_published_detail, toggle_published_dm, "
+            "set_published_status et paste_comments. Commence toujours par la.\n\n"
+            "Sans parametre, rend tout. Lecture seule, aucun effet de bord. Exige une cle MCP, "
+            "et ne montre que les posts du compte qui la porte."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="get_published_detail",
-        description="Détail d'un PublishedLeadMagnet + ses engagements (comments + statut DM).",
+        description=(
+            "Rend le detail d'un lead magnet publie et la liste de ses engagements : chaque "
+            "commentaire recolte, s'il matche le mot-cle CTA, le DM prepare, et ou en est son "
+            "envoi.\n\n"
+            "Quand l'utiliser : avant d'envoyer des DM, pour recuperer les messages et les "
+            "identifiants d'engagement que mark_engagement_sent attend. list_published donne la "
+            "vue d'ensemble ; celui-ci descend dans un seul post.\n\n"
+            "Lecture seule, aucun effet de bord. Exige une cle MCP dont le compte possede "
+            "l'enregistrement."
+        ),
         inputSchema={
             "type": "object",
-            "properties": {"id": {"type": "integer"}},
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Identifiant numerique du lead magnet publie, celui que rend list_published. Ce n'est PAS l'URN LinkedIn.",
+                },
+            },
             "required": ["id"],
         },
     ),
     Tool(
         name="toggle_published_dm",
-        description="Active/désactive auto_dm_enabled sur un PublishedLeadMagnet.",
+        description=(
+            "Arme ou desarme l'envoi automatique des DM sur un lead magnet publie. Le suivi des "
+            "commentaires continue dans les deux cas : seul l'envoi change.\n\n"
+            "Quand l'utiliser : desarmer le temps de relire le message qui partira au nom de "
+            "l'utilisateur, puis armer une fois ce message valide. Pour arreter le suivi entier "
+            "et pas seulement les DM, prends set_published_status avec paused.\n\n"
+            "Effets : ecrit un seul champ. Reversible et idempotent. Armer n'envoie RIEN "
+            "retroactivement : seuls les commentaires arrives ensuite sont traites. Exige une "
+            "cle MCP dont le compte possede l'enregistrement."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "id":      {"type": "integer"},
-                "enabled": {"type": "boolean"},
+                "id": {
+                    "type": "integer",
+                    "description": "Identifiant numerique du lead magnet publie, celui que rend list_published. Ce n'est PAS l'URN LinkedIn.",
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "true arme l'envoi automatique des DM, false le coupe. Aucun defaut, la valeur est obligatoire pour eviter une bascule involontaire.",
+                },
             },
             "required": ["id", "enabled"],
         },
     ),
     Tool(
         name="set_published_status",
-        description="Change le status d'un PublishedLeadMagnet (active/paused/completed/error).",
+        description=(
+            "Change l'etat de SUIVI d'un lead magnet deja publie. N'affecte que le suivi cote "
+            "Publiar : le post reste en ligne sur LinkedIn quoi qu'il arrive, cet outil ne "
+            "publie, ne modifie et ne supprime aucun contenu.\n\n"
+            "Quand l'utiliser : suspendre la collecte sur un post dont tu ne traites plus les "
+            "commentaires (paused), clore une campagne finie (completed), signaler un suivi "
+            "casse (error), reprendre plus tard (active).\n\n"
+            "Ne pas confondre avec ses voisins : toggle_published_dm coupe l'envoi des DM sans "
+            "arreter le suivi ; update_post reecrit le texte du post ; publish_lead_magnet en "
+            "cree un. Aucun ne remplace celui-ci.\n\n"
+            "Effets : ecrit un seul champ sur l'enregistrement. Reversible, idempotent, "
+            "rejouable sans dommage. Exige une cle MCP dont le compte possede l'enregistrement."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "id":     {"type": "integer"},
-                "status": {"type": "string", "enum": ["active","paused","completed","error"]},
+                "id": {
+                    "type": "integer",
+                    "description": "Identifiant numerique du lead magnet publie, celui que rend list_published. Ce n'est PAS l'URN LinkedIn.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "paused", "completed", "error"],
+                    "description": "active = suivi en cours ; paused = suspendu ; completed = campagne terminee ; error = suivi casse. La valeur remplace l'ancienne, sans fusion.",
+                },
             },
             "required": ["id", "status"],
         },
@@ -376,12 +494,28 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="mark_engagement_sent",
-        description="Marque un CommentEngagement comme DM envoyé (manuellement via LinkedIn).",
+        description=(
+            "Marque un commentaire comme ayant recu son DM. Publiar ne peut pas envoyer les "
+            "messages lui-meme : LinkedIn n'expose aucun endpoint public de messagerie 1:1. "
+            "L'utilisateur envoie a la main, puis coche ici pour que le compteur suive.\n\n"
+            "Quand l'utiliser : juste apres un envoi reel, un appel par commentaire. Ne "
+            "l'utilise JAMAIS pour declencher un envoi, il n'en declenche aucun. Pour obtenir "
+            "les messages a envoyer, passe d'abord par paste_comments.\n\n"
+            "Effets : ecrit un seul champ. Idempotent et reversible, sent a false annule la "
+            "marque. Exige une cle MCP dont le compte possede l'engagement."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "id":   {"type": "integer"},
-                "sent": {"type": "boolean", "default": True},
+                "id": {
+                    "type": "integer",
+                    "description": "Identifiant numerique de l'ENGAGEMENT, celui que rendent paste_comments et get_published_detail. Ce n'est pas l'id du lead magnet.",
+                },
+                "sent": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "true marque le DM comme envoye, false annule la marque. Defaut true, donc omettre revient a marquer envoye.",
+                },
             },
             "required": ["id"],
         },
@@ -396,11 +530,11 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "topic":            {"type": "string"},
-                "claim":            {"type": "string"},
-                "tone":             {"type": "string", "enum": ["professionnel","inspirant","storytelling","educatif","humoristique"]},
-                "proof_override":   {"type": "string", "enum": ["low","medium","high"]},
-                "user_has_upload":  {"type": "boolean", "default": False},
+                "topic":            {"type": "string", "description": "Sujet du post, en texte libre. Seul champ obligatoire."},
+                "claim":            {"type": "string", "description": "Affirmation a defendre, si tu en as une precise. Omise, elle est deduite du sujet."},
+                "tone":             {"type": "string", "enum": ["professionnel","inspirant","storytelling","educatif","humoristique"], "description": "Registre d'ecriture. Defaut professionnel."},
+                "proof_override":   {"type": "string", "enum": ["low","medium","high"], "description": "Force le niveau de preuve exige par la porte de validation, au lieu de le laisser deduire. A n'utiliser que pour tester le comportement de la porte."},
+                "user_has_upload":  {"type": "boolean", "default": False, "description": "Declare qu'une preuve reelle a ete fournie, ce qui ouvre les archetypes qui l'exigent. Defaut false."},
             },
             "required": ["topic"],
         },
@@ -414,7 +548,13 @@ TOOLS: list[Tool] = [
         ),
         inputSchema={
             "type": "object",
-            "properties": {"base_prompt": {"type": "string", "maxLength": 800}},
+            "properties": {
+                "base_prompt": {
+                    "type": "string",
+                    "maxLength": 800,
+                    "description": "Description de la scene a generer, en anglais de preference, 800 caracteres maximum. Decris la lumiere et le cadrage, pas le texte : les mots seront poses par le renderer, pas par le modele d'image.",
+                },
+            },
             "required": ["base_prompt"],
         },
     ),
@@ -427,13 +567,25 @@ TOOLS: list[Tool] = [
         ),
         inputSchema={
             "type": "object",
-            "properties": {"id": {"type": "integer"}},
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Identifiant numerique du lead magnet publie. L'appel aboutira mais rendra une liste vide, voir la description.",
+                },
+            },
             "required": ["id"],
         },
     ),
     Tool(
         name="whoami",
-        description="Retourne les infos du user authentifié via la clé MCP (utile pour debug auth).",
+        description=(
+            "Rend l'identite du compte associe a la cle MCP courante, et son plan.\n\n"
+            "Quand l'utiliser : verifier qu'une cle est valide et qu'elle pointe sur le bon "
+            "compte, avant de conclure qu'un autre outil echoue pour une raison metier. Un "
+            "appel qui echoue ici signale un probleme d'authentification, pas de donnees.\n\n"
+            "Sans parametre. Lecture seule, aucun effet de bord, ne revele jamais la cle "
+            "elle-meme."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
 ]
