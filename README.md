@@ -1,4 +1,4 @@
-<!-- mcp-name: io.github.tokdar2410621/publiar -->
+<!-- mcp-name: io.github.TokDar2410621/publiar -->
 
 # publiar-mcp
 
