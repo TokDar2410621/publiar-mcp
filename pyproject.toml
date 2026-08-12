@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "publiar-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Serveur MCP qui ecrit des lead magnets LinkedIn et refuse d'inventer : 6 regles anti-hallucination bloquantes, 8 archetypes visuels, publication et suivi."
 authors = [{ name = "Darius Tokam", email = "tokamdarius@gmail.com" }]
 requires-python = ">=3.10"
@@ -33,8 +33,11 @@ classifiers = [
     "Natural Language :: French",
 ]
 dependencies = [
-    "mcp>=1.0.0",
-    "httpx>=0.27.0",
+    # Borne haute indispensable : mcp 2.0 a supprime Server.list_tools, et
+    # publiar-mcp 0.1.1 est parti sur PyPI avec mcp>=1.0.0. pip a donc
+    # installe la 2.x et le paquet plantait a l'import, des l'installation.
+    "mcp>=1.0.0,<2.0.0",
+    "httpx>=0.27.0,<1.0.0",
 ]
 
 [project.urls]

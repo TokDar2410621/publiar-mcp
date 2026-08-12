@@ -74,6 +74,20 @@ jobs:
           pip install --upgrade build
           python -m build
 
+      - name: Verifier que le paquet construit demarre vraiment
+        # La garde qui manquait. 0.1.1 est parti sur PyPI avec mcp>=1.0.0,
+        # pip a installe la 2.x dont l'API a supprime Server.list_tools, et
+        # le paquet plantait a l'import des l'installation. Tous les
+        # controles precedents portaient sur les metadonnees, aucun
+        # n'installait le paquet. Un paquet casse en ligne est pire qu'une
+        # absence, et PyPI fige la version.
+        run: |
+          python -m venv /tmp/fumee
+          /tmp/fumee/bin/pip install --quiet dist/*.whl
+          /tmp/fumee/bin/python -c "import publiar_mcp.server as s; assert len(s.TOOLS) >= 19, f'{len(s.TOOLS)} outils declares, attendu au moins 19'; print('import OK,', len(s.TOOLS), 'outils')"
+          /tmp/fumee/bin/publiar-mcp < /dev/null 2>&1 | grep -q "PUBLIAR_API_KEY" \
+            || { echo "le binaire ne rend pas le refus attendu sans cle" >&2; exit 1; }
+
       - name: Publier sur PyPI
         # Bascule seule en OIDC quand aucun jeton n'est fourni.
         # skip-existing rend le workflow rejouable : si le registre a echoue
