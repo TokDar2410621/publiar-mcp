@@ -1,0 +1,18 @@
+{
+  "//": "Exemple de config Claude Desktop avec publiar-mcp. Copie le contenu dans :",
+  "//1": "  macOS : ~/Library/Application Support/Claude/claude_desktop_config.json",
+  "//2": "  Windows : %APPDATA%\\Claude\\claude_desktop_config.json",
+  "//3": "  Linux : ~/.config/Claude/claude_desktop_config.json",
+  "//4": "Remplace mcp_pub_REPLACE_ME par ta clé créée sur publiar.app/profile",
+  "//5": "Redémarre ensuite Claude Desktop complètement (Cmd+Q puis relance)",
+
+  "mcpServers": {
+    "publiar": {
+      "command": "publiar-mcp",
+      "env": {
+        "PUBLIAR_API_KEY": "mcp_pub_REPLACE_ME",
+        "PUBLIAR_API_URL": "https://api.publiar.app/api"
+      }
+    }
+  }
+}

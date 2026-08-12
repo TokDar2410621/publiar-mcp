@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.tokdar2410621/publiar",
+  "title": "Publiar",
+  "description": "Ecrit des lead magnets LinkedIn qui refusent d'inventer : six regles bloquantes anti-hallucination, huit archetypes visuels rendus en PNG ou GIF, publication et suivi.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/TokDar2410621/publiar-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "publiar-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PUBLIAR_API_KEY",
+          "description": "Cle MCP creee sur publiar.app/profile, section Cles MCP. Commence par mcp_pub_.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "PUBLIAR_API_URL",
+          "description": "Endpoint REST Publiar. Defaut : https://api.publiar.app/api",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

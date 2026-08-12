@@ -1,0 +1,556 @@
+"""Publiar MCP server entrypoint (stdio).
+
+Exposes 15 Publiar tools to MCP-compatible AI agents. Each tool wraps a
+REST call to the Publiar backend (https://api.publiar.app/api by default),
+authenticated via the MCP API key configured per-user in /profile.
+
+Architecture (deliberately thin):
+    AI agent  ──tool call──>  publiar-mcp  ──HTTP Bearer──>  api.publiar.app
+                                                                    │
+                                                                    └─> Django views
+
+No business logic is duplicated here. The MCP layer is purely a protocol
+adapter: MCP tool spec → HTTP request → JSON / NDJSON / PNG bytes.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+import os
+import sys
+from typing import Any
+
+import httpx
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import (
+    CallToolResult,
+    ImageContent,
+    TextContent,
+    Tool,
+)
+
+logger = logging.getLogger("publiar_mcp")
+
+
+# ── Configuration ──────────────────────────────────────────────────────────
+
+DEFAULT_API_URL = "https://api.publiar.app/api"
+
+
+class Config:
+    def __init__(self) -> None:
+        self.api_key = os.environ.get("PUBLIAR_API_KEY", "").strip()
+        self.api_url = os.environ.get("PUBLIAR_API_URL", DEFAULT_API_URL).rstrip("/")
+        self.timeout = float(os.environ.get("PUBLIAR_TIMEOUT", "60"))
+
+    def validate(self) -> None:
+        if not self.api_key:
+            raise RuntimeError(
+                "PUBLIAR_API_KEY env var manquante. Crée une clé sur "
+                "publiar.app/profile (section 'Clés MCP') puis colle-la dans "
+                "la config de ton agent MCP."
+            )
+        if not self.api_key.startswith("mcp_pub_"):
+            raise RuntimeError(
+                "PUBLIAR_API_KEY invalide — doit commencer par 'mcp_pub_'."
+            )
+
+
+CFG = Config()
+
+
+# ── HTTP client (lazy, shared) ─────────────────────────────────────────────
+
+_client: httpx.AsyncClient | None = None
+
+
+def http() -> httpx.AsyncClient:
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(
+            base_url=CFG.api_url,
+            headers={
+                "Authorization": f"Bearer {CFG.api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "publiar-mcp/0.1.0",
+            },
+            timeout=CFG.timeout,
+        )
+    return _client
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+async def _request(method: str, path: str, **kwargs) -> Any:
+    r = await http().request(method, path, **kwargs)
+    if r.status_code >= 400:
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+        raise RuntimeError(f"Publiar API {method} {path} → {r.status_code}: {body}")
+    if r.headers.get("content-type", "").startswith("application/x-ndjson"):
+        # Stream NDJSON → list of events
+        events: list[dict] = []
+        for line in r.text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return {"events": events}
+    if r.headers.get("content-type", "").startswith("image/"):
+        return {"png_base64": base64.b64encode(r.content).decode(), "mime": r.headers["content-type"]}
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+
+def _ok(content: Any) -> CallToolResult:
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(content, ensure_ascii=False, indent=2))])
+
+
+def _err(msg: str) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=f"❌ {msg}")],
+        isError=True,
+    )
+
+
+# ── Tool definitions (16 tools) ────────────────────────────────────────────
+
+TOOLS: list[Tool] = [
+    Tool(
+        name="generate_lead_magnet",
+        description=(
+            "Génère un lead magnet LinkedIn complet (post texte + visual_spec) à partir d'un "
+            "input structuré (outils utilisés, chiffre + source, type de preuve, etc.). "
+            "Stream NDJSON (validation → post → visual_spec → done). Renvoie la liste des "
+            "événements parsés."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "outils":        {"type": "array", "items": {"type": "string"}, "description": "Outils utilisés (ex: ['Claude','n8n'])"},
+                "chiffre":       {"type": "object", "description": "Résultat chiffré : {value, unit?, timeframe?, source, source_detail?}"},
+                "resource_type": {"type": "string", "enum": ["guide_pdf","video_tutorial","bundle_prompts","agents_system","workflow_template","cheat_sheet"]},
+                "cta_keyword":   {"type": "string", "description": "Mot-clé CTA en majuscules (CLAUDE, MAPS, AGENTS...)"},
+                "proof_type":    {"type": "string", "enum": ["none","photo_selfie","screenshot_workflow","file_tree","role_list","benchmark_table","product_announcement"]},
+                "proof_file_tree":     {"type": "array", "description": "Si proof_type=file_tree"},
+                "proof_roles":         {"type": "array", "description": "Si proof_type=role_list"},
+                "proof_product_name":  {"type": "string"},
+                "proof_product_link":  {"type": "string"},
+                "audience":      {"type": "string", "enum": ["grand_public","pro_tech","pro_business"]},
+                "workshop_date": {"type": "string"},
+                "auto_dm_enabled":   {"type": "boolean"},
+                "resource_url":      {"type": "string"},
+                "resource_message":  {"type": "string"},
+            },
+            "required": ["outils", "resource_type", "cta_keyword", "proof_type"],
+        },
+    ),
+    Tool(
+        name="render_visual",
+        description=(
+            "Rend un LeadMagnetVisualSpec en PNG (1080x1080 ou ratio adapté). Retourne le PNG "
+            "encodé base64 + mime-type. 8 archétypes supportés."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "spec": {"type": "object", "description": "LeadMagnetVisualSpec — discriminé par archetype"},
+            },
+            "required": ["spec"],
+        },
+    ),
+    Tool(
+        name="render_gif",
+        description=(
+            "Rend un lead magnet ANIME en GIF (1080x1080, boucle infinie). Recettes : 'tool_pairing"
+            "' (brands[], connector, caption_bottom) et 'metric_counter' (value, unit, prefix, labe"
+            "l, caption_bottom). PUBLIABLE SUR LINKEDIN, verifie le 2026-08-11 par un aller-retour "
+            "reel : un GIF de 39 frames uploade via /rest/images ressort en 39 frames animees. L'ar"
+            "tefact servi s'appelle image-shrink_1280 et reste anime, ce nom ne prouve donc aucun a"
+            "platissement. La cause des GIF figes d'avant etait /v2/assets, qui n'accepte que jpeg "
+            "et png : le format n'etait pas supporte en entree. Seul point non verifie : que le fil"
+            " JOUE l'animation a l'affichage, ce qu'un post reel regarde a l'oeil confirmerait. Cou"
+            "te cher a rendre (528 Mo de pic memoire), reste sur render_visual quand l'animation n'"
+            "apporte rien."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"spec": {"type": "object"}},
+            "required": ["spec"],
+        },
+    ),
+    Tool(
+        name="list_corpus",
+        description=(
+            "Liste les lead magnets du corpus de référence (45 entrées : 30+ posts du docx "
+            "Darius + 45 images classifiées). Filtrable par archetype, tri par engagement."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "archetype": {"type": "string", "description": "Filtre par archétype (optionnel)"},
+                "order_by":  {"type": "string", "enum": ["engagement","archetype"], "default": "engagement"},
+                "limit":     {"type": "integer", "default": 60, "maximum": 200},
+            },
+        },
+    ),
+    Tool(
+        name="find_similar_corpus",
+        description=(
+            "RAG retrieval : retourne les top-K lead magnets du corpus les plus similaires à "
+            "une requête (texte libre + brands optionnels). Score = embedding cosine + "
+            "engagement bump (log10 likes)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query":     {"type": "string", "description": "Description libre du lead magnet souhaité"},
+                "brands":    {"type": "array", "items": {"type": "string"}, "description": "Brands seed pour booster les matches"},
+                "k":         {"type": "integer", "default": 5, "maximum": 20},
+                "archetype": {"type": "string", "description": "Restrict à un archétype"},
+            },
+            "required": ["query"],
+        },
+    ),
+    Tool(
+        name="publish_lead_magnet",
+        description=(
+            "Publie un lead magnet sur LinkedIn depuis l'agent, sans ouvrir la webapp. "
+            "DEUX PHASES OBLIGATOIRES. Premier appel sans confirmed : le serveur rend le "
+            "visuel et retourne un APERÇU (post_text + png_base64) SANS rien publier. Tu "
+            "DOIS alors montrer le texte ET l'image à l'utilisateur et attendre son "
+            "accord explicite. Second appel avec confirmed: true : la publication part. "
+            "Ne confirme jamais à la place de l'utilisateur, c'est son nom sur le post. "
+            "Si resource_url est fourni, il est TESTÉ avant publication (règle R6 : une "
+            "ressource morte annoncée à des commentateurs coûte plus cher que l'absence "
+            "de post). Retourne le post_urn : enchaîne avec register_published pour "
+            "activer le suivi des commentaires et les DM."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content":       {"type": "string", "description": "Le texte du post, prêt à publier"},
+                "image_url":     {"type": "string", "description": "URL publique d'une image déjà prête. À PRIVILÉGIER sur image_base64 : 200 Ko font 265 000 caractères une fois encodés."},
+                "image_base64":  {"type": "string", "description": "Image déjà prête (PNG/GIF/JPEG, data URI toléré). Prioritaire sur visual_spec."},
+                "visual_spec":   {"type": "object", "description": "Spec de l'archétype, rendue en PNG et attachée"},
+                "first_comment": {"type": "string", "description": "Commentaire posté juste après (y mettre le lien)"},
+                "resource_url":  {"type": "string", "description": "URL de la ressource promise, vérifiée avant publication"},
+                "confirmed":     {"type": "boolean", "default": False, "description": "False = aperçu seul. True = publie, UNIQUEMENT après accord explicite de l'utilisateur sur l'aperçu."},
+            },
+            "required": ["content"],
+        },
+    ),
+    Tool(
+        name="update_post",
+        description=(
+            "Reecrit le texte d'un post LinkedIn DEJA publie. Sert quand le hook est rate ou "
+            "qu'une affirmation s'avere fausse : editer bat republier, l'URN, la date et l'enga"
+            "gement sont conserves. DEUX PHASES OBLIGATOIRES, comme publish_lead_magnet. Premie"
+            "r appel sans confirmed : retourne l'avant et l'apres SANS rien toucher. Montre les"
+            " deux a l'utilisateur, puis rappelle avec confirmed: true s'il valide. Le VISUEL n"
+            "'est pas modifiable, LinkedIn ne l'autorise pas : l'image publiee reste en place, "
+            "seul le texte change. Passe le texte ENTIER, pas un fragment : le champ est rempla"
+            "ce, jamais fusionne."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "post_urn":  {"type": "string", "description": "L'URN rendu a la publication, ex: urn:li:share:7493173296780242944"},
+                "content":   {"type": "string", "description": "Le nouveau texte COMPLET du post"},
+                "confirmed": {"type": "boolean", "description": "false ou absent = apercu seul, rien n'est modifie"},
+            },
+            "required": ["post_urn", "content"],
+        },
+    ),
+    Tool(
+        name="add_memory",
+        description=(
+            "Ecrit une entree dans la memoire de l'utilisateur. C'est la voie d'entree du second ce"
+            "rveau : ce que tu sais et que Publiar n'a pas vu passer. source et source_date sont OB"
+            "LIGATOIRES, sans provenance une note ancienne ressort plus tard dans une phrase au pre"
+            "sent. kind parmi brand_voice, past_post, audience, decision, manual. learned_rule et a"
+            "nti_pattern sont refuses : ils se derivent des performances mesurees, on ne les declar"
+            "e pas. scope cloisonne par projet et filtre le retrieval. La deduplication rend le rej"
+            "eu d'une ingestion inoffensif."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content":       {"type": "string", "description": "le texte a memoriser, 20 000 caracteres maximum"},
+                "kind":          {"type": "string", "description": "brand_voice | past_post | audience | decision | manual"},
+                "source":        {"type": "string", "description": "d'ou ca vient, ex: 'git commit 3d61f4d', 'mesure perso', 'doc officielle'"},
+                "source_date":   {"type": "string", "description": "YYYY-MM-DD, ni au futur ni avant 2015"},
+                "title":         {"type": "string", "description": "titre optionnel, ameliore le retrieval"},
+                "scope":         {"type": "string", "description": "nom de projet optionnel, cloisonne le retrieval"},
+                "source_ref":    {"type": "string", "description": "cle technique optionnelle, permet de purger et reinserer"},
+            },
+            "required": ["content", "kind", "source", "source_date"],
+        },
+    ),
+    Tool(
+        name="register_published",
+        description=(
+            "Enregistre un lead magnet publié sur LinkedIn (snapshot du LeadMagnetInput + "
+            "URN du post LinkedIn pour le tracking engagement)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "post_urn":         {"type": "string", "description": "urn:li:ugcPost:... ou urn:li:share:..."},
+                "cta_keyword":      {"type": "string"},
+                "input_payload":    {"type": "object", "description": "LeadMagnetInput original"},
+                "post_text":        {"type": "string"},
+                "visual_spec":      {"type": "object"},
+                "archetype":        {"type": "string"},
+                "resource_url":     {"type": "string"},
+                "resource_message": {"type": "string"},
+                "auto_dm_enabled":  {"type": "boolean", "default": False},
+            },
+            "required": ["post_urn", "cta_keyword"],
+        },
+    ),
+    Tool(
+        name="list_published",
+        description="Liste les lead magnets publiés de l'utilisateur (avec stats engagement rolling).",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="get_published_detail",
+        description="Détail d'un PublishedLeadMagnet + ses engagements (comments + statut DM).",
+        inputSchema={
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
+        },
+    ),
+    Tool(
+        name="toggle_published_dm",
+        description="Active/désactive auto_dm_enabled sur un PublishedLeadMagnet.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id":      {"type": "integer"},
+                "enabled": {"type": "boolean"},
+            },
+            "required": ["id", "enabled"],
+        },
+    ),
+    Tool(
+        name="set_published_status",
+        description="Change le status d'un PublishedLeadMagnet (active/paused/completed/error).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id":     {"type": "integer"},
+                "status": {"type": "string", "enum": ["active","paused","completed","error"]},
+            },
+            "required": ["id", "status"],
+        },
+    ),
+    Tool(
+        name="paste_comments",
+        description=(
+            "Sprint E.3' Option B : import des comments LinkedIn collés par l'utilisateur "
+            "(formats : tab, pipe, free-form). Parse + matche le CTA + génère les DM "
+            "personnalisés prêts à copier-coller manuellement (LinkedIn r_member_social "
+            "étant CLOSED, l'envoi auto est impossible)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id":       {"type": "integer", "description": "ID du PublishedLeadMagnet"},
+                "raw_text": {"type": "string", "description": "Blob multi-lignes des comments"},
+            },
+            "required": ["id", "raw_text"],
+        },
+    ),
+    Tool(
+        name="mark_engagement_sent",
+        description="Marque un CommentEngagement comme DM envoyé (manuellement via LinkedIn).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id":   {"type": "integer"},
+                "sent": {"type": "boolean", "default": True},
+            },
+            "required": ["id"],
+        },
+    ),
+    Tool(
+        name="generate_pair",
+        description=(
+            "Pipeline v3 legacy : génère 2 variants (hook + image SPEC) couplés via le pair_generator "
+            "(coupled motifs + proof gate). Utilise plutôt generate_lead_magnet — celui-ci reste pour "
+            "le retrieval explicite via biais/motifs."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "topic":            {"type": "string"},
+                "claim":            {"type": "string"},
+                "tone":             {"type": "string", "enum": ["professionnel","inspirant","storytelling","educatif","humoristique"]},
+                "proof_override":   {"type": "string", "enum": ["low","medium","high"]},
+                "user_has_upload":  {"type": "boolean", "default": False},
+            },
+            "required": ["topic"],
+        },
+    ),
+    Tool(
+        name="prepare_visual_base",
+        description=(
+            "Pour l'archétype dark_thumbnail : génère via Gemini 2.5 Flash Image un fond "
+            "cinematic background à partir d'un base_prompt. Retourne un data: URL prêt à "
+            "injecter dans le spec."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"base_prompt": {"type": "string", "maxLength": 800}},
+            "required": ["base_prompt"],
+        },
+    ),
+    Tool(
+        name="poll_published_now",
+        description=(
+            "Force un poll Community API immédiat sur un PublishedLeadMagnet (legacy, "
+            "retournera des engagements vides puisque r_member_social est CLOSED — préférer "
+            "paste_comments)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
+        },
+    ),
+    Tool(
+        name="whoami",
+        description="Retourne les infos du user authentifié via la clé MCP (utile pour debug auth).",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+]
+
+
+# ── Tool dispatch ──────────────────────────────────────────────────────────
+
+async def call_tool(name: str, arguments: dict) -> CallToolResult:
+    try:
+        if name == "generate_lead_magnet":
+            data = await _request("POST", "/linkedin/v3/lead-magnet/generate/", json=arguments)
+        elif name == "render_visual":
+            r = await http().post("/linkedin/v3/visual/generate/", json={"spec": arguments["spec"]})
+            if r.status_code >= 400:
+                return _err(f"render_visual {r.status_code}: {r.text[:200]}")
+            data = {
+                "png_base64":   base64.b64encode(r.content).decode(),
+                "mime":         r.headers.get("content-type", "image/png"),
+                "bytes_size":   len(r.content),
+            }
+        elif name == "render_gif":
+            r = await http().post("/linkedin/v3/visual/gif/", json={"spec": arguments["spec"]})
+            if r.status_code >= 400:
+                return _err(f"render_gif {r.status_code}: {r.text[:200]}")
+            data = {
+                "gif_base64": base64.b64encode(r.content).decode(),
+                "mime":       r.headers.get("content-type", "image/gif"),
+                "bytes_size": len(r.content),
+            }
+        elif name == "list_corpus":
+            params = {k: v for k, v in arguments.items() if v is not None}
+            data = await _request("GET", "/linkedin/v3/corpus/list/", params=params)
+        elif name == "find_similar_corpus":
+            data = await _request("POST", "/linkedin/v3/corpus/similar/", json=arguments)
+        elif name == "publish_lead_magnet":
+            data = await _request("POST", "/linkedin/v3/publish/", json=arguments)
+        elif name == "update_post":
+            data = await _request("POST", "/linkedin/v3/publish/update/", json=arguments)
+        elif name == "add_memory":
+            data = await _request("POST", "/linkedin/v3/memory/add/", json=arguments)
+        elif name == "register_published":
+            data = await _request("POST", "/linkedin/v3/published/register/", json=arguments)
+        elif name == "list_published":
+            data = await _request("GET", "/linkedin/v3/published/list/")
+        elif name == "get_published_detail":
+            data = await _request("GET", f"/linkedin/v3/published/{arguments['id']}/")
+        elif name == "toggle_published_dm":
+            data = await _request("POST", f"/linkedin/v3/published/{arguments['id']}/toggle-dm/", json={"enabled": arguments["enabled"]})
+        elif name == "set_published_status":
+            data = await _request("POST", f"/linkedin/v3/published/{arguments['id']}/set-status/", json={"status": arguments["status"]})
+        elif name == "paste_comments":
+            data = await _request("POST", f"/linkedin/v3/published/{arguments['id']}/paste-comments/", json={"raw_text": arguments["raw_text"]})
+        elif name == "mark_engagement_sent":
+            data = await _request("POST", f"/linkedin/v3/engagements/{arguments['id']}/mark-sent/", json={"sent": arguments.get("sent", True)})
+        elif name == "generate_pair":
+            data = await _request("POST", "/linkedin/v3/generate-pair/", json=arguments)
+        elif name == "prepare_visual_base":
+            data = await _request("POST", "/linkedin/v3/visual/prepare-base/", json=arguments)
+        elif name == "poll_published_now":
+            data = await _request("POST", f"/linkedin/v3/published/{arguments['id']}/poll/")
+        elif name == "whoami":
+            data = await _request("GET", "/auth/profile/")
+        else:
+            return _err(f"Tool inconnu: {name}")
+        return _ok(data)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("tool_call_failed name=%s err=%s", name, e)
+        return _err(f"{name} a échoué : {e}")
+
+
+# ── Server setup ───────────────────────────────────────────────────────────
+
+server = Server("publiar")
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return TOOLS
+
+
+@server.call_tool()
+async def handle_call(name: str, arguments: dict) -> list[TextContent | ImageContent]:
+    result = await call_tool(name, arguments or {})
+    return result.content
+
+
+# ── Entrypoint ─────────────────────────────────────────────────────────────
+
+async def _run() -> None:
+    CFG.validate()
+    logger.info(
+        "Publiar MCP server starting — api_url=%s, key_prefix=%s",
+        CFG.api_url, CFG.api_key[:16] + "…",
+    )
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options(),
+        )
+
+
+def main() -> None:
+    """Entrypoint for the `publiar-mcp` console script."""
+    logging.basicConfig(
+        level=os.environ.get("PUBLIAR_LOG_LEVEL", "INFO"),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except RuntimeError as e:
+        logger.error(str(e))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

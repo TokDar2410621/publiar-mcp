@@ -1,0 +1,82 @@
+name: Publier publiar-mcp
+
+# Un tag vN.N.N declenche toute la chaine : construction, PyPI, registre MCP.
+# Aucun secret n'est stocke. PyPI et le registre acceptent tous deux l'OIDC
+# de GitHub Actions, donc il n'existe aucun jeton a faire fuir ni a faire
+# tourner. C'est `id-token: write` qui autorise les deux.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verifier que les trois versions concordent
+        # Le tag, pyproject.toml et server.json doivent dire la meme chose.
+        # PyPI fige une version pour toujours : une derive decouverte apres
+        # coup se paye d'un numero de version brule.
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          PYPROJECT=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          if [ "$TAG" != "$PYPROJECT" ]; then
+            echo "Tag v$TAG mais pyproject.toml dit $PYPROJECT" >&2
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_ENV"
+
+      - name: Verifier le marqueur de propriete
+        # Sans cette chaine dans le README, le registre refusera de croire
+        # que le paquet PyPI est le tien, et l'etape finale echouera apres
+        # que PyPI aura deja fige la version.
+        run: |
+          grep -q "mcp-name: io.github.tokdar2410621/publiar" README.md \
+            || { echo "marqueur mcp-name absent du README" >&2; exit 1; }
+
+      - name: Construire
+        run: |
+          pip install --upgrade build
+          python -m build
+
+      - name: Publier sur PyPI
+        # Bascule seule en OIDC quand aucun jeton n'est fourni.
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Installer mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+
+      - name: Aligner server.json sur le tag
+        run: |
+          jq --arg v "$version" '.version = $v | .packages[0].version = $v' \
+            server.json > server.tmp && mv server.tmp server.json
+
+      - name: S'authentifier au registre MCP
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publier au registre MCP
+        run: ./mcp-publisher publish
+
+      - name: Verifier depuis l'exterieur
+        # Ce que la commande precedente affiche ne prouve rien. Seule une
+        # requete au registre depuis le reseau public le fait.
+        run: |
+          sleep 10
+          curl -sf "https://registry.modelcontextprotocol.io/v0.1/servers?search=publiar" \
+            | grep -q "io.github.tokdar2410621/publiar" \
+            && echo "reference dans le registre" \
+            || { echo "absent du registre apres publication" >&2; exit 1; }

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "publiar-mcp"
+version = "0.1.0"
+description = "Serveur MCP qui ecrit des lead magnets LinkedIn et refuse d'inventer : 6 regles anti-hallucination bloquantes, 8 archetypes visuels, publication et suivi."
+authors = [{ name = "Darius Tokam", email = "tokamdarius@gmail.com" }]
+requires-python = ">=3.10"
+license = { text = "MIT" }
+readme = "README.md"
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "linkedin",
+    "lead-magnet",
+    "claude",
+    "ai-agents",
+    "content-generation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Natural Language :: French",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://publiar.app"
+Repository = "https://github.com/TokDar2410621/publiar-mcp"
+Issues = "https://github.com/TokDar2410621/publiar-mcp/issues"
+
+[project.scripts]
+publiar-mcp = "publiar_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["publiar_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "publiar_mcp",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "server.json",
+]
