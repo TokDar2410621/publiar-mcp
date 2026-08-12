@@ -84,9 +84,26 @@ jobs:
           skip-existing: true
 
       - name: Installer mcp-publisher
+        # Le curl anonyme de la doc officielle a rendu 107 octets au lieu de
+        # 7 Mo le 2026-08-12, etrangle cote runner, et ces 107 octets sont
+        # partis dans tar qui a echoue sur un message obscur. gh release
+        # download passe par le jeton du job, donc pas de limite anonyme, et
+        # la verification finale refuse un binaire qui ne demarre pas.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
-            | tar xz mcp-publisher
+          for essai in 1 2 3; do
+            gh release download --repo modelcontextprotocol/registry \
+              --pattern "mcp-publisher_linux_amd64.tar.gz" \
+              --output mcp-publisher.tar.gz --clobber && break
+            echo "tentative $essai echouee, nouvelle tentative dans 5 s" >&2
+            sleep 5
+          done
+          file mcp-publisher.tar.gz | grep -q "gzip compressed" \
+            || { echo "archive invalide : $(ls -l mcp-publisher.tar.gz)" >&2; exit 1; }
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+          ./mcp-publisher --help > /dev/null
 
       - name: S'authentifier au registre MCP
         run: ./mcp-publisher login github-oidc
