@@ -25,18 +25,41 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verifier que les trois versions concordent
-        # Le tag, pyproject.toml et server.json doivent dire la meme chose.
-        # PyPI fige une version pour toujours : une derive decouverte apres
-        # coup se paye d'un numero de version brule.
+      - name: Verifier que les versions concordent
+        # pyproject.toml fait foi. Le tag, quand il y en a un, doit s'y
+        # conformer. PyPI fige une version pour toujours : une derive
+        # decouverte apres coup se paye d'un numero brule.
         run: |
-          TAG=${GITHUB_REF#refs/tags/v}
           PYPROJECT=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
-          if [ "$TAG" != "$PYPROJECT" ]; then
-            echo "Tag v$TAG mais pyproject.toml dit $PYPROJECT" >&2
+          SERVERJSON=$(jq -r '.version' server.json)
+          SERVERPKG=$(jq -r '.packages[0].version' server.json)
+          if [ "$PYPROJECT" != "$SERVERJSON" ] || [ "$PYPROJECT" != "$SERVERPKG" ]; then
+            echo "divergence : pyproject=$PYPROJECT server.json=$SERVERJSON paquet=$SERVERPKG" >&2
             exit 1
           fi
-          echo "version=$TAG" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$PYPROJECT" ]; then
+            echo "Tag $GITHUB_REF_NAME mais pyproject.toml dit $PYPROJECT" >&2
+            exit 1
+          fi
+          echo "version=$PYPROJECT" >> "$GITHUB_ENV"
+
+      - name: Verifier les limites du schema server.json
+        # Le registre refuse en 422 sur des longueurs, apres que PyPI a deja
+        # fige la version. Vecu le 2026-08-12 : une description de 165
+        # caracteres pour une limite de 100. La garde se paye ici, pas la-bas.
+        run: |
+          for champ in description title; do
+            LEN=$(jq -r --arg c "$champ" '.[$c] // "" | length' server.json)
+            if [ "$LEN" -gt 100 ]; then
+              echo "server.json .$champ fait $LEN caracteres, la limite est 100" >&2
+              exit 1
+            fi
+          done
+          NAMELEN=$(jq -r '.name | length' server.json)
+          if [ "$NAMELEN" -gt 200 ] || [ "$NAMELEN" -lt 3 ]; then
+            echo "server.json .name fait $NAMELEN caracteres, attendu entre 3 et 200" >&2
+            exit 1
+          fi
 
       - name: Verifier le marqueur de propriete
         # Sans cette chaine dans le README, le registre refusera de croire
@@ -53,17 +76,17 @@ jobs:
 
       - name: Publier sur PyPI
         # Bascule seule en OIDC quand aucun jeton n'est fourni.
+        # skip-existing rend le workflow rejouable : si le registre a echoue
+        # apres que PyPI a reussi, on relance sans buter sur la version deja
+        # en ligne, et sans avoir a bruler un numero.
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
       - name: Installer mcp-publisher
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" \
             | tar xz mcp-publisher
-
-      - name: Aligner server.json sur le tag
-        run: |
-          jq --arg v "$version" '.version = $v | .packages[0].version = $v' \
-            server.json > server.tmp && mv server.tmp server.json
 
       - name: S'authentifier au registre MCP
         run: ./mcp-publisher login github-oidc
