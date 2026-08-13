@@ -8,7 +8,7 @@
 
 > **EN.** MCP server for Publiar. Writes LinkedIn lead magnets that refuse to
 > fabricate facts, renders the matching visual, publishes to LinkedIn and tracks
-> what happened. 19 tools, stdio transport. Generated posts are in French. MIT.
+> what happened. 22 tools, stdio transport. Generated posts are in French. MIT.
 
 Demande un post LinkedIn à un LLM, il te sort « après 7 semaines de tests
 intensifs, +340 % d'engagement ». Tu n'as rien testé pendant 7 semaines et le
@@ -57,7 +57,13 @@ claude mcp add publiar -e PUBLIAR_API_KEY=mcp_pub_xxxxx -- publiar-mcp
 
 Redémarre complètement l'agent pour qu'il charge le serveur.
 
-## Les 19 outils
+## Les 22 outils
+
+### Commencer
+
+| Outil | Ce qu'il fait |
+|---|---|
+| `get_brief` | LE point de départ : la méthode complète (règles R1-R8, jury de relecture, hook), l'archétype déduit, les 5 voisins du corpus, ta mémoire et tes ressources, en un appel |
 
 ### Écrire et rendre
 
@@ -73,6 +79,8 @@ Redémarre complètement l'agent pour qu'il charge le serveur.
 
 | Outil | Ce qu'il fait |
 |---|---|
+| `add_resource` | Héberge la ressource promise (markdown → page publique `/r/slug`), vues comptées |
+| `list_resources` | Tes ressources hébergées et combien de commentateurs ont ouvert le lien |
 | `publish_lead_magnet` | Publie texte + visuel sur LinkedIn. Deux phases : aperçu, puis confirmation. |
 | `update_post` | Réécrit le texte d'un post déjà en ligne. L'URN, la date et l'engagement survivent. |
 | `register_published` | Enregistre un post publié pour le suivi |

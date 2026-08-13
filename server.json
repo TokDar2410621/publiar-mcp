@@ -3,7 +3,7 @@
   "name": "io.github.TokDar2410621/publiar",
   "title": "Publiar",
   "description": "Ecrit des lead magnets LinkedIn qui refusent d'inventer, rend le visuel et publie.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "repository": {
     "url": "https://github.com/TokDar2410621/publiar-mcp",
     "source": "github"
@@ -35,7 +35,7 @@
     {
       "registryType": "pypi",
       "identifier": "publiar-mcp",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "transport": {
         "type": "stdio"
       },
@@ -58,3 +58,4 @@
     }
   ]
 }
+

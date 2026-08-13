@@ -123,9 +123,34 @@ def _err(msg: str) -> CallToolResult:
     )
 
 
-# ── Tool definitions (16 tools) ────────────────────────────────────────────
+# ── Tool definitions (22 tools) ────────────────────────────────────────────
 
 TOOLS: list[Tool] = [
+    Tool(
+        name="get_brief",
+        description=(
+            "LE POINT DE DÉPART de tout lead magnet : appelle-le AVANT d'écrire quoi que ce "
+            "soit. Un appel rend cinq choses : la méthode Publiar complète (ordre des étapes, "
+            "les 8 règles anti-hallucination R1-R8, le jury de relecture scrolleur + lecteur "
+            "pressé, la discipline du hook, la structure du post), l'archétype visuel déduit de "
+            "la matière déclarée, les 5 posts du corpus gagnant les plus proches du sujet, la "
+            "mémoire pertinente de l'utilisateur (voix, décisions, règles apprises) et ses "
+            "ressources déjà hébergées avec leurs vues. Suis la méthode rendue : elle est la "
+            "référence, y compris face à tes propres habitudes de rédaction. Lecture seule, "
+            "rejouable."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query":      {"type": "string", "description": "Description libre de la matière : sujet, outils, chiffre, preuve disponible, ce que l'utilisateur veut promettre."},
+                "brands":     {"type": "array", "items": {"type": "string"}, "description": "Outils ou marques de la matière (ex: ['Claude','Notion']). Guident l'archétype et la recherche corpus."},
+                "proof_type": {"type": "string", "enum": ["none", "photo_selfie", "screenshot_workflow", "file_tree", "role_list", "benchmark_table", "product_announcement"], "description": "Preuve que l'utilisateur POSSÈDE réellement. Déclarée ici pour déduire l'archétype ; l'asset réel sera exigé à la génération (règle R5). Défaut none."},
+                "audience":   {"type": "string", "description": "Public visé. 'grand_public' bascule une annonce produit vers youtube_thumbnail."},
+                "chiffre":    {"type": "string", "description": "Le chiffre central s'il existe, avec unité et période (ex: '3h par jour depuis 2 mois'). Sa source sera exigée par R2."},
+            },
+            "required": ["query"],
+        },
+    ),
     Tool(
         name="generate_lead_magnet",
         description=(
@@ -296,6 +321,38 @@ TOOLS: list[Tool] = [
             },
             "required": ["post_urn", "content"],
         },
+    ),
+    Tool(
+        name="add_resource",
+        description=(
+            "Heberge la RESSOURCE qu'un lead magnet promet : le guide, la checklist, le bundle "
+            "que les commentateurs recevront en DM. Rend une URL publique stable sous le domaine "
+            "Publiar, a mettre dans resource_url de register_published et dans le message DM. "
+            "Pourquoi heberger ici plutot qu'un lien externe : l'URL est testable par la regle R6 "
+            "avant publication, la page compte ses VUES (le premier chiffre de conversion de la "
+            "boucle, LinkedIn ne rend pas les clics), et une coquille se corrige en place sans "
+            "casser le lien deja envoye. Upsert par slug : rappeler avec le meme slug met a jour "
+            "le contenu, l'URL ne change pas. Un slug appartenant a un autre compte est refuse. "
+            "Contenu markdown, 100 000 caracteres max, rendu en page lisible."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Titre de la page publique, jusqu'a 200 caracteres."},
+                "body_markdown": {"type": "string", "description": "Le contenu complet en markdown. C'est CE que le commentateur recoit : mets-y la ressource entiere, pas un teaser."},
+                "slug": {"type": "string", "description": "Optionnel. Minuscules, chiffres, tirets, 3 a 60 caracteres, pour une URL parlante. Omis, un jeton court non enumerable est genere."},
+            },
+            "required": ["title", "body_markdown"],
+        },
+    ),
+    Tool(
+        name="list_resources",
+        description=(
+            "Liste les ressources hebergees de l'utilisateur avec leur URL publique et leur "
+            "compteur de VUES. C'est ici que se lit la conversion commentaire vers ouverture du "
+            "lien, qu'aucun autre outil ne mesure. Lecture seule, sans parametre."
+        ),
+        inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="add_memory",
@@ -595,7 +652,9 @@ TOOLS: list[Tool] = [
 
 async def call_tool(name: str, arguments: dict) -> CallToolResult:
     try:
-        if name == "generate_lead_magnet":
+        if name == "get_brief":
+            data = await _request("POST", "/linkedin/v3/brief/", json=arguments)
+        elif name == "generate_lead_magnet":
             data = await _request("POST", "/linkedin/v3/lead-magnet/generate/", json=arguments)
         elif name == "render_visual":
             r = await http().post("/linkedin/v3/visual/generate/", json={"spec": arguments["spec"]})
@@ -624,6 +683,10 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
             data = await _request("POST", "/linkedin/v3/publish/", json=arguments)
         elif name == "update_post":
             data = await _request("POST", "/linkedin/v3/publish/update/", json=arguments)
+        elif name == "add_resource":
+            data = await _request("POST", "/linkedin/v3/resources/add/", json=arguments)
+        elif name == "list_resources":
+            data = await _request("GET", "/linkedin/v3/resources/")
         elif name == "add_memory":
             data = await _request("POST", "/linkedin/v3/memory/add/", json=arguments)
         elif name == "register_published":
