@@ -259,7 +259,10 @@ TOOLS: list[Tool] = [
         description=(
             "RAG retrieval : retourne les top-K lead magnets du corpus les plus similaires à "
             "une requête (texte libre + brands optionnels). Score = embedding cosine + "
-            "engagement bump (log10 likes)."
+            "engagement bump (log10 likes). Plan gratuit : 5 recherches par jour, extraits de "
+            "400 caractères ; le plafond se réinitialise chaque jour. get_brief (qui rend déjà "
+            "les 5 voisins du sujet) et list_corpus ne comptent pas dedans. Plan pro : "
+            "illimité, texte intégral des posts."
         ),
         inputSchema={
             "type": "object",
@@ -284,12 +287,16 @@ TOOLS: list[Tool] = [
             "Si resource_url est fourni, il est TESTÉ avant publication (règle R6 : une "
             "ressource morte annoncée à des commentateurs coûte plus cher que l'absence "
             "de post). Retourne le post_urn : enchaîne avec register_published pour "
-            "activer le suivi des commentaires et les DM."
+            "activer le suivi des commentaires et les DM. Une video_url part en VIDÉO "
+            "NATIVE LinkedIn (lecteur, son) et prime sur toute image : un enregistrement "
+            "réel bat un visuel généré."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "content":       {"type": "string", "description": "Le texte du post, prêt à publier"},
+                "video_url":     {"type": "string", "description": "URL publique d'une vidéo MP4/MOV (75 Ko à 100 Mo), publiée en VIDÉO NATIVE LinkedIn. Prime sur toute image. À l'aperçu elle est validée sans être téléversée ; le téléversement (1 à 3 min) n'a lieu qu'à la confirmation. L'aperçu rend video_sha256 : repasse-le en expected_sha256 à la confirmation."},
+                "expected_sha256": {"type": "string", "description": "Empreinte video_sha256 rendue par l'aperçu. Si video_url sert un autre fichier entre les deux phases, la publication refuse (409) au lieu de publier une vidéo non validée."},
                 "image_url":     {"type": "string", "description": "URL publique d'une image déjà prête. À PRIVILÉGIER sur image_base64 : 200 Ko font 265 000 caractères une fois encodés."},
                 "image_base64":  {"type": "string", "description": "Image déjà prête (PNG/GIF/JPEG, data URI toléré). Prioritaire sur visual_spec."},
                 "visual_spec":   {"type": "object", "description": "Spec de l'archétype, rendue en PNG et attachée"},
